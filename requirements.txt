@@ -1,0 +1,80 @@
+# ===== Core Framework =====
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic>=2.12.0
+pydantic-settings>=2.13.0
+python-dotenv==1.0.0
+python-multipart==0.0.6
+
+# ===== LLM Providers =====
+# Google Gemini (use new SDK)
+google-genai>=0.2.0  # New SDK (recommended)
+
+# Groq (Fallback)
+groq>=0.4.2
+
+# OpenAI (if needed as alternative)
+openai>=1.10.0
+
+# ===== AWS Bedrock (for Nova embeddings) =====
+boto3>=1.34.34
+botocore>=1.34.34
+
+# ===== Embeddings =====
+sentence-transformers>=2.3.1
+transformers>=4.37.2
+torch>=2.2.0  # Use latest available version for your system
+
+# ===== Vector Database =====
+qdrant-client>=1.7.0
+
+# ===== Search & Ranking =====
+rank-bm25>=0.2.2  # For hybrid search (BM25 + vector) - ACTIVELY USED
+
+# ===== Document Processing =====
+pypdf>=4.0.1
+python-docx>=1.1.0
+Pillow>=10.2.0
+beautifulsoup4>=4.12.3
+lxml>=5.1.0
+markdown>=3.5.2
+
+# ===== Text Processing =====
+nltk>=3.8.1
+spacy>=3.7.2
+tiktoken>=0.5.2
+
+# ===== Data Science =====
+numpy>=1.26.3
+pandas>=2.2.0
+scikit-learn>=1.4.0
+
+# ===== HTTP & Async =====
+httpx>=0.26.0
+aiohttp>=3.9.3
+requests>=2.31.0
+
+# ===== Utilities =====
+python-jose[cryptography]>=3.3.0  # JWT tokens (for future auth)
+passlib[bcrypt]>=1.7.4  # Password hashing (for future auth)
+psutil>=5.9.0  # For system metrics (actively used)
+
+# ===== Testing (Development) =====
+pytest>=8.0.0
+pytest-asyncio>=0.23.4
+pytest-cov>=4.1.0
+
+# ===== Code Quality (Development) =====
+black>=24.1.1
+flake8>=7.0.0
+mypy>=1.8.0
+isort>=5.13.2
+
+# ===== Frontend (Streamlit) =====
+streamlit>=1.31.0
+plotly>=5.18.0
+streamlit-chat>=0.1.1
+
+# ===== Additional Dependencies =====
+pyyaml>=6.0.1
+jinja2>=3.1.3

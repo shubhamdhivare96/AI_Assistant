@@ -1,0 +1,58 @@
+# ---------- PYTHON ENVIRONMENTS ----------
+venv/
+env/
+.venv/
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# ---------- CRITICAL SECRETS ----------
+.env
+secret/
+
+# ---------- LOGGING & DATABASE ----------
+*.log
+ingestion.log
+retry_ingestion.log
+*.sqlite3
+*.db
+
+# ---------- TEST FILES ----------
+# Ignore any root folder or inner folder named test
+test/
+tests/
+# Ignore all test python scripts sitting in the root directory
+test_*.py
+
+# ---------- DEBUG & MAINTENANCE SCRIPTS ----------
+debug_*.py
+check_*.py
+retry_*.py
+verify_*.py
+
+# ---------- AI SUMMARY / JUNK MARKDOWN FILES ----------
+# Ignores all the troubleshooting documents generated during fixing sessions
+*FIX*.md
+*SUMMARY*.md
+*ANALYSIS*.md
+*RESOLUTION*.md
+*COMPLETE.md
+*GUIDE.md
+*STATUS.md
+*CHECKLIST.md
+REALITY_CHECK.md
+REMOVED_FOR_SIMPLICITY.md
+ANSWERS_TO_YOUR_QUESTIONS.md
+
+# ---------- OS & IDE FILES ----------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# ---------- DATA/DOCUMENTS ----------
+docs/
+python-3.14-docs-text/
