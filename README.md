@@ -10,7 +10,7 @@ A scalable Retrieval-Augmented Generation (RAG) backend utilizing a highly resil
 *   **Domain Specific Constraint:** Strictly adheres to domain instruction in `.env`, politely declining out-of-domain answers instead of hallucinating.
 
 ## Prerequisites
-* Python 3.9+
+* Python 3.10+
 * Qdrant DB Instance (API Key + Cloud URL)
 * API Keys for LLM Providers (Google GenAI, Groq, AWS Credentials)
 
