@@ -23,9 +23,8 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
-    # Database
-    DATABASE_URL: str = "sqlite:///./ai_assistant.db"
-    DATABASE_ECHO: bool = False
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379"
     
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
@@ -130,11 +129,6 @@ class Settings(BaseSettings):
     ENABLE_FILE_UPLOAD: bool = True
     ENABLE_VOICE_INPUT: bool = False
     ENABLE_IMAGE_PROCESSING: bool = True
-    
-    # Database connection pool
-    DATABASE_POOL_SIZE: int = 5
-    DATABASE_MAX_OVERFLOW: int = 10
-    DATABASE_POOL_RECYCLE: int = 3600
     
     # Resilience Configuration
     CIRCUIT_BREAKER_ENABLED: bool = True

@@ -110,6 +110,47 @@ class AdaptiveRouter:
         logger.info(f"Query complexity: {complexity} (score: {complexity_score})")
         return analysis
     
+    def calculate_optimal_alpha(self, query: str) -> float:
+        """
+        Calculate optimal alpha (Weight: Dense vs Sparse)
+        - Dense (Vector) is better for concepts/questions (High Alpha)
+        - Sparse (BM25) is better for codes/keywords (Low Alpha)
+        """
+        query_lower = query.lower()
+        
+        # Technical indicators (Sparse-heavy / Low Alpha)
+        tech_indicators = [
+            '.py', '.js', '.ts', '.java', '.cpp', '.sql', 
+            'version', 'v3', 'v2', 'v4', 'asyncio', 'fastapi', 
+            'error', 'exception', 'decorator', 'module', 
+            'import', 'from', 'class', 'def ', 'function',
+            'pip install', 'npm install', 'config'
+        ]
+        
+        tech_score = sum(1 for indicator in tech_indicators if indicator in query_lower)
+        
+        # Question/Conceptual indicators (Dense-heavy / High Alpha)
+        conceptual_indicators = [
+            'why', 'how to', 'difference between', 'what is', 
+            'compare', 'explain', 'understand', 'meaning',
+            'best practices', 'pros and cons', 'overview'
+        ]
+        
+        concept_score = sum(1 for indicator in conceptual_indicators if indicator in query_lower)
+        
+        # Base alpha
+        alpha = 0.5
+        
+        if tech_score > concept_score:
+            # Shift towards BM25 (Sparse)
+            alpha = max(0.2, 0.5 - (tech_score * 0.1))
+        elif concept_score > tech_score:
+            # Shift towards Vector (Dense)
+            alpha = min(0.8, 0.5 + (concept_score * 0.1))
+            
+        logger.info(f"Calculated optimal alpha: {alpha:.2f} (Tech: {tech_score}, Concept: {concept_score})")
+        return alpha
+    
     async def route_query(
         self, 
         query: str,

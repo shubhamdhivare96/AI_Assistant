@@ -92,7 +92,7 @@ with st.sidebar:
     st.header("📊 System Health")
     
     try:
-        health_response = requests.get(f"{API_BASE_URL}/health/health", timeout=5)
+        health_response = requests.get(f"{API_BASE_URL}/health/", timeout=5)
         if health_response.status_code == 200:
             health_data = health_response.json()
             st.success("✅ API Online")

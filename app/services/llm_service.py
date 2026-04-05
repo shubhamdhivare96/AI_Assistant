@@ -84,7 +84,7 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: int = 1000
     ) -> str:
-        """Generate response: Gemini → Groq → Nova Pro"""
+        """Generate full response: Gemini → Groq → Nova Pro"""
         # --- Tier 1: Gemini ---
         try:
             return await self._generate_gemini_response(messages, temperature, max_tokens)
@@ -105,6 +105,33 @@ class LLMService:
         except Exception as e3:
             logger.error(f"All LLM providers failed. Nova error: {str(e3)[:120]}")
             raise Exception("All LLM providers exhausted (Gemini, Groq, Nova Pro)")
+
+    async def generate_response_stream(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 1000
+    ):
+        """Generate streaming response: Gemini → Groq"""
+        # Note: Fallback in streaming is tricky; if tier 1 fails BEFORE starting stream, we switch.
+        # If it fails MID-STREAM, we can't easily switch tiers without double-output.
+        
+        # --- Tier 1: Gemini Stream ---
+        try:
+            async for chunk in self._generate_gemini_stream(messages, temperature, max_tokens):
+                yield chunk
+            return
+        except Exception as e:
+            logger.warning(f"Gemini stream failed: {str(e)[:120]}, trying Groq stream fallback")
+        
+        # --- Tier 2: Groq Stream ---
+        try:
+            async for chunk in self._generate_groq_stream(messages, temperature, max_tokens):
+                yield chunk
+            return
+        except Exception as e2:
+            logger.error(f"Gemini and Groq streams failed: {str(e2)[:120]}")
+            yield "⚠️ (Error: All streaming providers failed)"
     
     async def _generate_gemini_response(
         self, 
@@ -115,39 +142,70 @@ class LLMService:
         """Generate response using Google Gemini"""
         @resilient_call(llm_breaker, max_retries=3)
         async def _call_gemini():
-            # Convert messages to Gemini format
             prompt = self._messages_to_prompt(messages)
             
-            try:
-                if GENAI_NEW:
-                    # New SDK
-                    response = self.primary_client.models.generate_content(
-                        model=self.settings.LLM_MODEL,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=temperature,
-                            max_output_tokens=max_tokens
-                        )
+            if GENAI_NEW:
+                response = self.primary_client.models.generate_content(
+                    model=self.settings.LLM_MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=temperature,
+                        max_output_tokens=max_tokens
                     )
-                    return response.text
-                else:
-                    # Old SDK (deprecated)
-                    response = self.primary_client.generate_content(
-                        prompt,
-                        generation_config=genai.types.GenerationConfig(
-                            temperature=temperature,
-                            max_output_tokens=max_tokens
-                        )
+                )
+                return response.text
+            else:
+                response = self.primary_client.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=temperature,
+                        max_output_tokens=max_tokens
                     )
-                    return response.text
-            except Exception as e:
-                err_str = str(e)
-                # Detect 429 rate limit / quota exhausted — don't retry, go straight to Groq
-                if '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str:
-                    raise RateLimitError(f"Gemini quota exhausted: {err_str[:200]}")
-                raise
+                )
+                return response.text
         
-        return await _call_gemini()
+        try:
+            return await _call_gemini()
+        except Exception as e:
+            err_str = str(e)
+            if '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str:
+                raise RateLimitError(f"Gemini quota exhausted: {err_str[:200]}")
+            raise
+
+    async def _generate_gemini_stream(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int
+    ):
+        """Stream response using Google Gemini"""
+        prompt = self._messages_to_prompt(messages)
+        
+        if GENAI_NEW:
+            # new SDK supports streaming
+            for chunk in self.primary_client.models.generate_content_stream(
+                model=self.settings.LLM_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens
+                )
+            ):
+                if chunk.text:
+                    yield chunk.text
+        else:
+            # deprecated SDK
+            response = self.primary_client.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens
+                ),
+                stream=True
+            )
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
     
     async def _generate_groq_response(
         self, 
@@ -156,7 +214,7 @@ class LLMService:
         max_tokens: int
     ) -> str:
         """Generate response using Groq"""
-        @resilient_call(groq_breaker, max_retries=3)  # Use separate breaker - independent from Gemini
+        @resilient_call(groq_breaker, max_retries=3)
         async def _call_groq():
             response = self.fallback_client.chat.completions.create(
                 model=self.settings.FALLBACK_LLM_MODEL,
@@ -167,6 +225,24 @@ class LLMService:
             return response.choices[0].message.content
         
         return await _call_groq()
+
+    async def _generate_groq_stream(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int
+    ):
+        """Stream response using Groq"""
+        stream = self.fallback_client.chat.completions.create(
+            model=self.settings.FALLBACK_LLM_MODEL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True
+        )
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
     
     async def _generate_nova_response(
         self,

@@ -19,11 +19,7 @@ from app.config import get_settings
 
 # Get settings instance
 settings = get_settings()
-# Database removed - using in-memory storage only
-# from app.database import engine, Base, get_db
 from app.api.v1.api import api_router
-# Rate limiter removed - not required for assignment
-# from app.middleware.rate_limiter import RateLimiterMiddleware
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -54,8 +50,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 if hasattr(settings, 'ALLOWED_HOSTS'):
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.ALLOWED_HOSTS)
 
-# Rate limiter removed - not required for assignment
-# app.add_middleware(RateLimiterMiddleware)
+# Rate limiting middleware can be added here if needed
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
@@ -65,8 +60,15 @@ async def startup_event():
     """Application startup event"""
     logger.info("Starting AI Assistant API...")
     
-    # Database removed - using in-memory storage only
-    # Base.metadata.create_all(bind=engine)
+    # Initialize database tables
+    from app.database import engine, Base
+    import app.models # Ensure models are loaded
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables initialized")
+    
+    # Initialize Observability
+    from app.core.observability import observability
+    logger.info(f"Observability initialized (Status: {'Enabled' if observability.enabled else 'Logging-only'})")
     
     logger.info("AI Assistant API started successfully")
 

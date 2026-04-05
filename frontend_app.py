@@ -101,7 +101,7 @@ with st.sidebar:
     st.header("📊 System Status")
     
     try:
-        health_response = requests.get(f"{API_BASE_URL}/health/health")
+        health_response = requests.get(f"{API_BASE_URL}/health/")
         if health_response.status_code == 200:
             st.success("✅ API Online")
         else:

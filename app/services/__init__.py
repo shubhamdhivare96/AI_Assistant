@@ -21,18 +21,8 @@ from app.services.secure_retrieval import SecureRetrievalService
 from app.services.prompt_injection_detector import PromptInjectionDetector
 from app.services.domain_classifier import DomainClassifier
 from app.services.fallback_service import FallbackService
-
-# Restored services (now using in-memory storage)
-from app.services.error_analyzer import ErrorAnalyzer
-from app.services.finetuning_pipeline import FineTuningPipeline
-from app.services.feedback_system import FeedbackSystem
 from app.services.token_budget_manager import TokenBudgetManager
 from app.services.anomaly_detector import AnomalyDetector
-from app.services.data_retention import DataRetentionService
-from app.services.consent_manager import ConsentManager
-from app.services.audit_logger import AuditLogger
-from app.services.conversation_service import ConversationService
-from app.services.document_service import DocumentService
 
 __all__ = [
     "ChatService",
@@ -54,15 +44,6 @@ __all__ = [
     "PromptInjectionDetector",
     "DomainClassifier",
     "FallbackService",
-    # Restored services
-    "ErrorAnalyzer",
-    "FineTuningPipeline",
-    "FeedbackSystem",
     "TokenBudgetManager",
     "AnomalyDetector",
-    "DataRetentionService",
-    "ConsentManager",
-    "AuditLogger",
-    "ConversationService",
-    "DocumentService",
 ]
