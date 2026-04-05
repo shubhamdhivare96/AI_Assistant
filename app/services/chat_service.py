@@ -147,6 +147,15 @@ class ChatService:
             if injection_result['action'] == 'BLOCK':
                 return self.injection_detector.get_safe_rejection_message()
             
+            # Domain Classification - ENFORCE STRICT BOUNDARIES
+            domain_result = await self.domain_classifier.is_in_domain(message)
+            if not domain_result['in_domain']:
+                logger.warning(f"Out-of-domain query blocked: {message} (Topic: {domain_result.get('detected_topic')})")
+                return self.domain_classifier.get_rejection_message(
+                    message, 
+                    domain_result.get('detected_topic', 'unknown')
+                )
+            
             # PII masking
             masked_message = await self.pii_masker.mask_pii(message)
             query = masked_message['masked']
