@@ -72,6 +72,13 @@ class ChatService:
         self.context_manager = ContextManager()
         self.secure_retrieval = SecureRetrievalService()
 
+    async def initialize_services(self):
+        """Pre-load all AI services during startup"""
+        logger.info("Warming up AI services...")
+        await self.hybrid_rag.initialize()
+        await self.reranker.initialize()
+        logger.info("AI services warmed up")
+
     async def process_chat(
         self, 
         message: str, 

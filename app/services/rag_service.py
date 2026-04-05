@@ -2,6 +2,7 @@
 RAG (Retrieval-Augmented Generation) Service
 Embeddings: AWS Nova 2 (primary), Sentence Transformers (fallback)
 """
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
@@ -9,6 +10,7 @@ from qdrant_client.http.models import Distance, VectorParams, PointStruct
 import boto3
 import json
 from sentence_transformers import SentenceTransformer
+from fastembed import SparseTextEmbedding
 import numpy as np
 import uuid
 from datetime import datetime
@@ -25,6 +27,7 @@ class RAGService:
         self.settings = get_settings()
         self.bedrock_client = None  # AWS Nova
         self.fallback_embedding = None  # Sentence Transformers
+        self.sparse_embedding = None  # FastEmbed Sparse
         self.qdrant_client = None
         self.embedding_dimensions = self.settings.EMBEDDING_DIMENSIONS
         # Don't initialize models immediately - use lazy loading
@@ -35,10 +38,22 @@ class RAGService:
         if not self._models_initialized:
             self.initialize_models()
             self._models_initialized = True
+
+    async def initialize(self):
+        """Pre-load models for startup"""
+        self._ensure_models_initialized()
         
     def initialize_models(self):
         """Initialize embedding models and Qdrant client"""
         try:
+            # Initialize Qdrant client
+            self.qdrant_client = QdrantClient(
+                url=self.settings.QDRANT_URL,
+                api_key=self.settings.QDRANT_API_KEY,
+                timeout=120,
+                prefer_grpc=False  # Reverting to HTTP for better stability in this environment
+            )
+
             # Primary: AWS Nova 2
             if self.settings.AWS_ACCESS_KEY_ID:
                 self.bedrock_client = boto3.client(
@@ -53,7 +68,10 @@ class RAGService:
             self.fallback_embedding = SentenceTransformer(
                 self.settings.FALLBACK_EMBEDDING_MODEL
             )
-            logger.info("Fallback embedding initialized")
+            
+            # Sparse: FastEmbed (BGE-M3)
+            self.sparse_embedding = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
+            logger.info("Sparse embedding (Splade) initialized")
             
             # Get Qdrant client from connection pool
             self.qdrant_client = get_qdrant_client()
@@ -68,18 +86,50 @@ class RAGService:
             raise
     
     def _ensure_collection_exists(self):
-        """Ensure Qdrant collection exists"""
-        collections = self.qdrant_client.get_collections()
-        collection_name = "documents"
+        """Ensure Qdrant collection exists with Hybrid support (with retries for network stability)"""
+        from qdrant_client.http.models import Distance, VectorParams, SparseVectorParams
         
-        if collection_name not in [c.name for c in collections.collections]:
-            self.qdrant_client.recreate_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=self.embedding_dimensions,  # 1024 for Nova 2
-                    distance=Distance.COSINE
-                )
-            )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                collections = self.qdrant_client.get_collections()
+                collection_name = "documents"
+                
+                # Check if collection needs recreation (if it doesn't have sparse config)
+                exists = collection_name in [c.name for c in collections.collections]
+                needs_recreate = False
+                
+                if exists:
+                    info = self.qdrant_client.get_collection(collection_name)
+                    if not info.config.params.sparse_vectors:
+                        needs_recreate = True
+                        logger.warning(f"Collection {collection_name} exists but lacks sparse vector support. Recreating...")
+
+                if not exists or needs_recreate:
+                    if exists:
+                        self.qdrant_client.delete_collection(collection_name)
+                    
+                    self.qdrant_client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config={
+                            "text-dense": VectorParams(
+                                size=self.embedding_dimensions,
+                                distance=Distance.COSINE
+                            )
+                        },
+                        sparse_vectors_config={
+                            "text-sparse": SparseVectorParams()
+                        }
+                    )
+                    logger.info(f"Collection {collection_name} created with Hybrid support (text-dense + text-sparse)")
+                return # Success
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to connect to Qdrant after {max_retries} attempts: {e}")
+                    raise
+                logger.warning(f"Qdrant connection attempt {attempt+1} failed: {e}. Retrying...")
+                import time
+                time.sleep(2)
     
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding with fallback"""
@@ -96,14 +146,8 @@ class RAGService:
                 embedding = embedding + [0.0] * (self.embedding_dimensions - len(embedding))
             return embedding[:self.embedding_dimensions]
     
-    async def _generate_nova_embedding(self, text: str) -> List[float]:
-        """Generate embedding using AWS Nova 2"""
-        # Truncate if needed (max 8172 tokens)
-        # Rough estimate: 1 token ≈ 4 characters
-        max_chars = self.settings.EMBEDDING_MAX_TOKENS * 4
-        if len(text) > max_chars:
-            text = text[:max_chars]
-        
+    def _invoke_bedrock_model(self, text: str):
+        """Blocking call to Bedrock - run in thread"""
         response = self.bedrock_client.invoke_model(
             modelId=self.settings.EMBEDDING_MODEL,
             body=json.dumps({
@@ -113,9 +157,21 @@ class RAGService:
                 }
             })
         )
+        return json.loads(response['body'].read())
+
+    async def _generate_nova_embedding(self, text: str) -> List[float]:
+        """Generate Bedrock embedding (threaded for concurrency)"""
+        # Truncate if needed (max 8172 tokens)
+        max_chars = self.settings.EMBEDDING_MAX_TOKENS * 4
+        if len(text) > max_chars:
+            text = text[:max_chars]
         
-        result = json.loads(response['body'].read())
-        return result['embedding']
+        try:
+            result = await asyncio.to_thread(self._invoke_bedrock_model, text)
+            return result['embedding']
+        except Exception as e:
+            logger.error(f"Bedrock invocation failed: {str(e)}")
+            raise
     
     async def retrieve_relevant_context(
         self, 
@@ -222,77 +278,165 @@ class RAGService:
             return None
     
     async def add_document(self, text: str, metadata: Dict[str, Any] = None):
-        """Add a document to the vector store"""
+        """Add a document with both Dense and Sparse vectors for Hybrid search"""
         try:
-            # Ensure models are initialized
             self._ensure_models_initialized()
             
-            # Generate embedding
-            embedding = self.fallback_embedding.encode(text).tolist()
+            # Generate Dense Embedding
+            dense_vector = await self._generate_embedding(text)
             
-            # Create point for Qdrant
+            # Generate Sparse Embedding (FastEmbed)
+            # .embed returns a generator, we take the first (and only) one
+            sparse_vector = list(self.sparse_embedding.embed([text]))[0]
+            
+            # Prepare Point
             point_id = str(uuid.uuid4())
-            point = {
-                "id": point_id,
-                "vector": embedding,
-                "payload": {
+            point = PointStruct(
+                id=point_id,
+                vector={
+                    "text-dense": dense_vector,
+                    "text-sparse": {
+                        "indices": sparse_vector.indices.tolist(),
+                        "values": sparse_vector.values.tolist()
+                    }
+                },
+                payload={
                     "text": text,
                     "metadata": metadata or {},
                     "timestamp": datetime.utcnow().isoformat()
                 }
-            }
+            )
             
-            # Add to Qdrant
+            # Upsert
             self.qdrant_client.upsert(
                 collection_name="documents",
                 points=[point]
             )
             
-            logger.info(f"Added document with ID: {point_id}")
+            logger.info(f"Added hybrid document: {point_id}")
             return point_id
             
         except Exception as e:
             logger.error(f"Error adding document: {str(e)}")
             raise
-    
-    async def search_similar(self, query: str, top_k: int = 5):
-        """Search for similar documents"""
+
+    async def add_documents(self, documents: List[Dict[str, Any]], batch_size: int = 10):
+        """Batch add documents with Hybrid vectors using concurrent memory batches and retries"""
+        self._ensure_models_initialized()
+        
+        # Process in smaller batches to avoid memory overflow (Splade is memory-intensive)
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i : i + batch_size]
+            
+            # Retry logic for network stability
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    points = []
+                    
+                    # Batch generate sparse embeddings for this small window (Splade)
+                    texts = [doc['text'] for doc in batch]
+                    sparse_vectors_gen = self.sparse_embedding.embed(texts)
+                    sparse_vectors = list(sparse_vectors_gen)
+                    
+                    # Generate Dense embeddings concurrently (Bedrock)
+                    dense_tasks = [self._generate_embedding(text) for text in texts]
+                    dense_vectors = await asyncio.gather(*dense_tasks)
+                    
+                    for j, doc in enumerate(batch):
+                        dense_vector = dense_vectors[j]
+                        sparse_vector = sparse_vectors[j]
+                        
+                        point = PointStruct(
+                            id=str(uuid.uuid4()),
+                            vector={
+                                "text-dense": dense_vector,
+                                "text-sparse": {
+                                    "indices": sparse_vector.indices.tolist(),
+                                    "values": sparse_vector.values.tolist()
+                                }
+                            },
+                            payload={
+                                "text": doc['text'],
+                                "metadata": doc.get('metadata', {}),
+                                "timestamp": datetime.utcnow().isoformat()
+                            }
+                        )
+                        points.append(point)
+                    
+                    if points:
+                        self.qdrant_client.upsert(
+                            collection_name="documents",
+                            points=points
+                        )
+                    break # Success!
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        logger.error(f"Failed to ingest batch after {max_retries} attempts: {e}")
+                        raise
+                    wait_time = (attempt + 1) * 2
+                    logger.warning(f"Batch ingestion attempt {attempt+1} failed: {e}. Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+
+            logger.info(f"Ingested batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1}")
+        
+        logger.info(f"Total hybrid documents indexed: {len(documents)}")
+
+    async def search_similar(self, query: str, top_k: int = 5, alpha: float = 0.5):
+        """Hybrid search (Dense + Sparse) using Qdrant Prefetch & Fusion"""
         try:
-            # Ensure models are initialized
             self._ensure_models_initialized()
+            from qdrant_client.http import models
             
-            # Generate query embedding
-            query_embedding = self.fallback_embedding.encode(query).tolist()
+            # 1. Generate Query Vectors
+            dense_vector = await self._generate_embedding(query)
+            sparse_vector = list(self.sparse_embedding.embed([query]))[0]
             
-            # Search in Qdrant
-            # qdrant-client >= 1.7: use query_points() instead of search()
+            # 2. Hybrid Search with Fusion
+            # We use prefetches for both dense and sparse, then fuse them
             search_response = self.qdrant_client.query_points(
                 collection_name="documents",
-                query=query_embedding,
-                limit=top_k
+                prefetch=[
+                    models.Prefetch(
+                        query=dense_vector,
+                        using="text-dense",
+                        limit=top_k * 2
+                    ),
+                    models.Prefetch(
+                        query=models.SparseVector(
+                            indices=sparse_vector.indices.tolist(),
+                            values=sparse_vector.values.tolist()
+                        ),
+                        using="text-sparse",
+                        limit=top_k * 2
+                    )
+                ],
+                # RRF is generally better for hybrid than score addition
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=top_k,
+                with_payload=True
             )
             
             return [
                 {
                     'text': hit.payload.get('text', ''),
                     'score': hit.score,
-                    'metadata': hit.payload.get('metadata', {})
+                    'metadata': hit.payload.get('metadata', {}),
+                    'retrieval_id': hit.id
                 }
                 for hit in search_response.points
             ]
             
         except Exception as e:
-            logger.error(f"Error searching documents: {str(e)}")
+            logger.error(f"Error in hybrid search_similar: {str(e)}")
             return []
-    
+
     async def retrieve_context(self, query: str, conversation_id: str = None):
-        """Retrieve relevant context for a query"""
-        # Get relevant documents
+        """Retrieve relevant context for a query using Hybrid search"""
         similar_docs = await self.search_similar(query)
         
-        # Format context
         context = "\n\n".join([
-            f"Document {i+1}: {doc['text'][:500]}..." 
+            f"Document {i+1}: {doc['text']}" 
             for i, doc in enumerate(similar_docs)
         ])
         
@@ -300,34 +444,6 @@ class RAGService:
             "context": context,
             "sources": similar_docs
         }
-    
-    async def add_documents(self, documents: List[Dict[str, Any]]):
-        """Add multiple documents to the vector store"""
-        # Ensure models are initialized
-        self._ensure_models_initialized()
-        
-        points = []
-        
-        for doc in documents:
-            embedding = self.fallback_embedding.encode(doc['text']).tolist()
-            
-            point = {
-                "id": str(uuid.uuid4()),
-                "vector": embedding,
-                "payload": {
-                    "text": doc['text'],
-                    "metadata": doc.get('metadata', {}),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-            }
-            points.append(point)
-        
-        # Batch upsert to Qdrant
-        if points:
-            self.qdrant_client.upsert(
-                collection_name="documents",
-                points=points
-            )
     
     def get_collection_stats(self):
         """Get collection statistics"""

@@ -35,6 +35,10 @@ class RerankingService:
             except Exception as e:
                 logger.error(f"Failed to load cross-encoder: {str(e)}")
                 raise
+
+    async def initialize(self):
+        """Pre-load the model for startup"""
+        self._ensure_model_initialized()
     
     async def rerank(
         self, 

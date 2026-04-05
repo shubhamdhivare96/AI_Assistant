@@ -70,6 +70,15 @@ async def startup_event():
     from app.core.observability import observability
     logger.info(f"Observability initialized (Status: {'Enabled' if observability.enabled else 'Logging-only'})")
     
+    # Pre-load AI models to eliminate cold start
+    try:
+        from app.services.chat_service import ChatService
+        chat_service = ChatService()
+        await chat_service.initialize_services()
+        logger.info("AI models pre-loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to pre-load models: {str(e)}")
+    
     logger.info("AI Assistant API started successfully")
 
 @app.on_event("shutdown")

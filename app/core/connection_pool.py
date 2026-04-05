@@ -31,7 +31,7 @@ class QdrantConnectionPool:
             client = QdrantClient(
                 url=settings.QDRANT_URL,
                 api_key=settings.QDRANT_API_KEY,
-                timeout=30
+                timeout=120  # Increased for hybrid indexing
             )
             self.connections.append(client)
             self.available.append(client)
