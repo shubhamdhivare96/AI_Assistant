@@ -18,10 +18,22 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
-    Process a chat message and return AI response
+    Process a chat message and return AI response (Legacy endpoint)
+    """
+    return await process_chat_message(request)
+
+@router.post("/query", response_model=ChatResponse)
+async def query(request: ChatRequest):
+    """
+    Process a chat message and return AI response (Assignment suggested endpoint)
+    """
+    return await process_chat_message(request)
+
+async def process_chat_message(request: ChatRequest):
+    """
+    Unified chat message processing logic
     """
     try:
-        # Database removed - ChatService now works without DB
         chat_service = ChatService()
         response = await chat_service.process_chat(
             message=request.message,
